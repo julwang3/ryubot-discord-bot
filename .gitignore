@@ -1,0 +1,6 @@
+node_modules/
+.env
+daylily.db
+daylily.db-journal
+daylily.db-wal
+daylily.db-shm
