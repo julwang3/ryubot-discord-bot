@@ -45,7 +45,8 @@ function formatDailyBlock(gameName, liveCurrent, maxAmt, refillInAmt, refillRate
     `**${gameName}**`,
     `${bar} ${liveCurrent}/${maxAmt} (${pct}%)`,
   ];
-  lines.push(`Refill rate: ${formatMinutes(refillRate)}\n`);
+  lines.push(`Refill rate: ${formatMinutes(refillRate)}`);
+  lines.push(``); // Empty line
   if (refillInLine) lines.push(refillInLine);
   lines.push(formatCapLine(isCapped, capAt));
 
