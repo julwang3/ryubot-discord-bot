@@ -19,6 +19,15 @@ function formatMinutes(totalMinutes) {
   return parts.join(' ');
 }
 
+/** Builds the "Next unit in: Xm / Ym" line with its own small progress bar,
+ * showing how far through the current refill cycle we are. */
+function formatRefillInLine(refillInAmt, refillRate, isCapped) {
+  if (isCapped) return null;
+  const elapsedInCycle = refillRate - refillInAmt;
+  const bar = buildBar(elapsedInCycle, refillRate, 8);
+  return `🕑 Next unit in ${formatMinutes(refillInAmt)}`;
+}
+
 /** Builds the "Caps <relative> (<absolute>)" line using Discord's native timestamp markdown,
  * which auto-adjusts to each viewer's timezone. */
 function formatCapLine(isCapped, capAt) {
@@ -27,15 +36,20 @@ function formatCapLine(isCapped, capAt) {
   return `⏳ Caps <t:${unixTs}:R> (<t:${unixTs}:f>)`;
 }
 
-function formatDailyBlock(gameName, liveCurrent, maxAmt, refillRate, isCapped, capAt) {
+function formatDailyBlock(gameName, liveCurrent, maxAmt, refillInAmt, refillRate, isCapped, capAt) {
   const pct = maxAmt > 0 ? Math.round((liveCurrent / maxAmt) * 100) : 0;
   const bar = buildBar(liveCurrent, maxAmt);
-  return (
-    `**${gameName}**\n` +
-    `${bar} ${liveCurrent}/${maxAmt} (${pct}%)\n` +
-    `Refill rate: ${formatMinutes(refillRate)} per unit\n` +
-    `${formatCapLine(isCapped, capAt)}`
-  );
+  const refillInLine = formatRefillInLine(refillInAmt, refillRate, isCapped);
+
+  const lines = [
+    `**${gameName}**`,
+    `${bar} ${liveCurrent}/${maxAmt} (${pct}%)`,
+  ];
+  lines.push(`Refill rate: ${formatMinutes(refillRate)}`);
+  if (refillInLine) lines.push(refillInLine);
+  lines.push(formatCapLine(isCapped, capAt));
+
+  return lines.join('\n');
 }
 
-module.exports = { buildBar, formatMinutes, formatCapLine, formatDailyBlock };
+module.exports = { buildBar, formatMinutes, formatCapLine, formatRefillInLine, formatDailyBlock };

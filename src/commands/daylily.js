@@ -14,7 +14,7 @@ const data = new SlashCommandBuilder()
       .addIntegerOption((o) => o.setName('current').setDescription('Current currency amount').setRequired(true).setMinValue(0))
       .addIntegerOption((o) => o.setName('max').setDescription('Maximum currency amount').setRequired(true).setMinValue(1))
       .addNumberOption((o) =>
-        o.setName('refill_elapsed').setDescription('Minutes elapsed toward the next refill tick').setRequired(true).setMinValue(0),
+        o.setName('refill_in').setDescription('Minutes remaining until the next refill tick').setRequired(true).setMinValue(0),
       )
       .addNumberOption((o) =>
         o.setName('refill_rate').setDescription('Minutes required to refill one unit').setRequired(true).setMinValue(0.0001),
@@ -27,17 +27,17 @@ const data = new SlashCommandBuilder()
       .addStringOption((o) => o.setName('game').setDescription('Game name').setRequired(true))
       .addIntegerOption((o) => o.setName('max').setDescription('New maximum currency amount').setRequired(false).setMinValue(1))
       .addNumberOption((o) =>
-        o.setName('refill_rate').setDescription('New refill rate').setRequired(false).setMinValue(0.0001),
+        o.setName('refill_rate').setDescription('New refill rate - minutes per unit').setRequired(false).setMinValue(0.0001),
       ),
   )
   .addSubcommand((sub) =>
     sub
       .setName('update')
-      .setDescription('Update the current amount and/or elapsed refill time')
+      .setDescription('Update the current amount and/or time until next refill')
       .addStringOption((o) => o.setName('game').setDescription('Game name').setRequired(true))
       .addIntegerOption((o) => o.setName('current').setDescription('New current currency amount').setRequired(false).setMinValue(0))
       .addNumberOption((o) =>
-        o.setName('refill_elapsed').setDescription('New minutes elapsed toward the next refill tick').setRequired(false).setMinValue(0),
+        o.setName('refill_in').setDescription('New minutes remaining until the next refill tick').setRequired(false).setMinValue(0),
       ),
   )
   .addSubcommand((sub) =>
@@ -50,7 +50,7 @@ const data = new SlashCommandBuilder()
     sub
       .setName('list')
       .setDescription('List tracked dailies with progress bars')
-      .addStringOption((o) => o.setName('game').setDescription('Optional: Show only this game').setRequired(false)),
+      .addStringOption((o) => o.setName('game').setDescription('Optional: show only this game').setRequired(false)),
   );
 
 async function execute(interaction) {
@@ -61,12 +61,19 @@ async function execute(interaction) {
     const game = interaction.options.getString('game').trim();
     const current = interaction.options.getInteger('current');
     const max = interaction.options.getInteger('max');
-    const refillElapsed = interaction.options.getNumber('refill_elapsed');
+    const refillIn = interaction.options.getNumber('refill_in');
     const refillRate = interaction.options.getNumber('refill_rate');
 
     if (current > max) {
       return interaction.reply({
         content: `⚠️ Current amount (${current}) can't be greater than max (${max}).`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (refillIn > refillRate) {
+      return interaction.reply({
+        content: `⚠️ refill_in (${refillIn}) can't be greater than refill_rate (${refillRate}).`,
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -78,13 +85,13 @@ async function execute(interaction) {
       });
     }
 
-    addDaily(userId, game, current, max, refillElapsed, refillRate);
+    addDaily(userId, game, current, max, refillIn, refillRate);
 
-    const live = computeLiveState(current, max, refillElapsed, refillRate, new Date());
+    const live = computeLiveState(current, max, refillIn, refillRate, new Date());
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle(`✅ Now tracking ${game}`)
-      .setDescription(formatDailyBlock(game, live.currentAmt, max, refillRate, live.isCapped, live.capAt));
+      .setDescription(formatDailyBlock(game, live.currentAmt, max, live.refillInAmt, refillRate, live.isCapped, live.capAt));
 
     return interaction.reply({ embeds: [embed] });
   }
@@ -108,18 +115,21 @@ async function execute(interaction) {
 
     // Snapshot the live state under the OLD rate first, so no progress is lost,
     // then apply the new max/rate going forward from this moment.
-    const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.elapsedRefillAmt, row.refillRate, row.updatedAt);
+    const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.refillInAmt, row.refillRate, row.updatedAt);
     const newMax = max ?? row.maxCurrencyAmt;
     const newRate = refillRate ?? row.refillRate;
     const newCurrent = Math.min(live.currentAmt, newMax);
+    // If the new rate is shorter than the time that was remaining, clamp so
+    // refill_in never exceeds the (possibly new, smaller) refill_rate.
+    const newrefillIn = Math.min(live.refillInAmt, newRate);
 
-    saveCheckpoint(row.id, newCurrent, newMax, live.elapsedRefillAmt, newRate);
+    saveCheckpoint(row.id, newCurrent, newMax, newrefillIn, newRate);
 
-    const live2 = computeLiveState(newCurrent, newMax, live.elapsedRefillAmt, newRate, new Date());
+    const live2 = computeLiveState(newCurrent, newMax, newrefillIn, newRate, new Date());
     const embed = new EmbedBuilder()
       .setColor(0xfee75c)
       .setTitle(`🔧 Edited ${game}`)
-      .setDescription(formatDailyBlock(game, live2.currentAmt, newMax, newRate, live2.isCapped, live2.capAt));
+      .setDescription(formatDailyBlock(game, live2.currentAmt, newMax, live2.refillInAmt, newRate, live2.isCapped, live2.capAt));
 
     return interaction.reply({ embeds: [embed] });
   }
@@ -127,11 +137,11 @@ async function execute(interaction) {
   if (sub === 'update') {
     const game = interaction.options.getString('game').trim();
     const current = interaction.options.getInteger('current');
-    const refillElapsed = interaction.options.getNumber('refill_elapsed');
+    const refillIn = interaction.options.getNumber('refill_in');
 
-    if (current === null && refillElapsed === null) {
+    if (current === null && refillIn === null) {
       return interaction.reply({
-        content: '⚠️ Provide at least one of `current` or `refill_elapsed` to update.',
+        content: '⚠️ Provide at least one of `current` or `refill_in` to update.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -141,10 +151,10 @@ async function execute(interaction) {
       return interaction.reply({ content: `❌ You're not tracking **${game}**.`, flags: MessageFlags.Ephemeral });
     }
 
-    const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.elapsedRefillAmt, row.refillRate, row.updatedAt);
+    const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.refillInAmt, row.refillRate, row.updatedAt);
 
     const newCurrent = current ?? live.currentAmt;
-    const newElapsed = refillElapsed ?? live.elapsedRefillAmt;
+    const newrefillIn = refillIn ?? live.refillInAmt;
 
     if (newCurrent > row.maxCurrencyAmt) {
       return interaction.reply({
@@ -153,13 +163,22 @@ async function execute(interaction) {
       });
     }
 
-    saveCheckpoint(row.id, newCurrent, row.maxCurrencyAmt, newElapsed, row.refillRate);
+    if (newrefillIn > row.refillRate) {
+      return interaction.reply({
+        content: `⚠️ refill_in (${newrefillIn}) can't be greater than this currency's refill_rate (${row.refillRate}).`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
-    const live2 = computeLiveState(newCurrent, row.maxCurrencyAmt, newElapsed, row.refillRate, new Date());
+    saveCheckpoint(row.id, newCurrent, row.maxCurrencyAmt, newrefillIn, row.refillRate);
+
+    const live2 = computeLiveState(newCurrent, row.maxCurrencyAmt, newrefillIn, row.refillRate, new Date());
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`🔄 Updated ${game}`)
-      .setDescription(formatDailyBlock(game, live2.currentAmt, row.maxCurrencyAmt, row.refillRate, live2.isCapped, live2.capAt));
+      .setDescription(
+        formatDailyBlock(game, live2.currentAmt, row.maxCurrencyAmt, live2.refillInAmt, row.refillRate, live2.isCapped, live2.capAt),
+      );
 
     return interaction.reply({ embeds: [embed] });
   }
@@ -197,8 +216,8 @@ async function execute(interaction) {
     }
 
     const blocks = rows.map((row) => {
-      const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.elapsedRefillAmt, row.refillRate, row.updatedAt);
-      return formatDailyBlock(row.gameName, live.currentAmt, row.maxCurrencyAmt, row.refillRate, live.isCapped, live.capAt);
+      const live = computeLiveState(row.currencyAmt, row.maxCurrencyAmt, row.refillInAmt, row.refillRate, row.updatedAt);
+      return formatDailyBlock(row.gameName, live.currentAmt, row.maxCurrencyAmt, live.refillInAmt, row.refillRate, live.isCapped, live.capAt);
     });
 
     const title = game ? `📋 ${rows[0].gameName}` : `📋 ${interaction.user.username}'s Game Dailies`;

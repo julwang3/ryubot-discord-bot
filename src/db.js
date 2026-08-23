@@ -13,7 +13,7 @@ db.exec(`
     gameName          TEXT    NOT NULL,
     currencyAmt       INTEGER NOT NULL,
     maxCurrencyAmt    INTEGER NOT NULL,
-    elapsedRefillAmt  REAL    NOT NULL DEFAULT 0,
+    refillInAmt       REAL    NOT NULL DEFAULT 0,
     refillRate        REAL    NOT NULL,
     updatedAt         TEXT    NOT NULL,
     UNIQUE(userId, gameName COLLATE NOCASE)
@@ -22,8 +22,8 @@ db.exec(`
 
 const statements = {
   insert: db.prepare(`
-    INSERT INTO dailies (userId, gameName, currencyAmt, maxCurrencyAmt, elapsedRefillAmt, refillRate, updatedAt)
-    VALUES (@userId, @gameName, @currencyAmt, @maxCurrencyAmt, @elapsedRefillAmt, @refillRate, @updatedAt)
+    INSERT INTO dailies (userId, gameName, currencyAmt, maxCurrencyAmt, refillInAmt, refillRate, updatedAt)
+    VALUES (@userId, @gameName, @currencyAmt, @maxCurrencyAmt, @refillInAmt, @refillRate, @updatedAt)
   `),
   findOne: db.prepare(`
     SELECT * FROM dailies WHERE userId = ? AND gameName = ? COLLATE NOCASE
@@ -33,7 +33,7 @@ const statements = {
   `),
   saveCheckpoint: db.prepare(`
     UPDATE dailies
-    SET currencyAmt = ?, maxCurrencyAmt = ?, elapsedRefillAmt = ?, refillRate = ?, updatedAt = ?
+    SET currencyAmt = ?, maxCurrencyAmt = ?, refillInAmt = ?, refillRate = ?, updatedAt = ?
     WHERE id = ?
   `),
   deleteOne: db.prepare(`
@@ -46,13 +46,13 @@ function rowToObj(row) {
   return { ...row, updatedAt: new Date(row.updatedAt) };
 }
 
-function addDaily(userId, gameName, currencyAmt, maxCurrencyAmt, elapsedRefillAmt, refillRate) {
+function addDaily(userId, gameName, currencyAmt, maxCurrencyAmt, refillInAmt, refillRate) {
   statements.insert.run({
     userId,
     gameName,
     currencyAmt,
     maxCurrencyAmt,
-    elapsedRefillAmt,
+    refillInAmt,
     refillRate,
     updatedAt: new Date().toISOString(),
   });
@@ -66,8 +66,8 @@ function listDailies(userId) {
   return statements.listByUser.all(userId).map(rowToObj);
 }
 
-function saveCheckpoint(id, currencyAmt, maxCurrencyAmt, elapsedRefillAmt, refillRate) {
-  statements.saveCheckpoint.run(currencyAmt, maxCurrencyAmt, elapsedRefillAmt, refillRate, new Date().toISOString(), id);
+function saveCheckpoint(id, currencyAmt, maxCurrencyAmt, refillInAmt, refillRate) {
+  statements.saveCheckpoint.run(currencyAmt, maxCurrencyAmt, refillInAmt, refillRate, new Date().toISOString(), id);
 }
 
 function deleteDaily(id) {
